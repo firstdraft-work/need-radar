@@ -40,17 +40,18 @@ export default function InviteModal({ onSuccess }: InviteModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8 max-w-md w-full">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div className="bg-[var(--surface)] rounded-2xl shadow-2xl p-8 max-w-md w-full border border-[var(--border)]">
         <div className="text-center mb-6">
-          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
-            <svg className="w-8 h-8 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+          {/* 雷达图标 */}
+          <div className="w-14 h-14 mx-auto mb-4 rounded-xl bg-blue-600/10 dark:bg-blue-400/10 flex items-center justify-center">
+            <svg className="w-7 h-7 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
             </svg>
           </div>
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">输入邀请码</h2>
-          <p className="text-gray-500 dark:text-gray-400 mt-2 text-sm">
-            AI 需求雷达目前处于内测阶段，请输入邀请码以访问
+          <h2 className="text-xl font-bold text-[var(--foreground)]">输入邀请码</h2>
+          <p className="text-[var(--muted)] mt-2 text-sm">
+            AI 需求雷达目前处于内测阶段
           </p>
         </div>
 
@@ -60,7 +61,7 @@ export default function InviteModal({ onSuccess }: InviteModalProps) {
             value={code}
             onChange={(e) => setCode(e.target.value)}
             placeholder="请输入邀请码"
-            className="w-full px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 text-center text-lg tracking-widest uppercase"
+            className="w-full px-4 py-3 rounded-xl border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-blue-500 text-center text-lg tracking-widest uppercase"
             autoFocus
             disabled={loading}
           />
@@ -72,7 +73,7 @@ export default function InviteModal({ onSuccess }: InviteModalProps) {
           <button
             type="submit"
             disabled={loading || !code.trim()}
-            className="w-full mt-4 px-6 py-3 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="w-full mt-4 px-6 py-3 rounded-xl bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             {loading ? "验证中..." : "验证邀请码"}
           </button>
