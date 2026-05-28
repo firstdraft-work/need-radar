@@ -4,63 +4,59 @@ import { RawPost } from "./types";
  * Search Reddit for posts matching a keyword.
  *
  * Network strategy:
- * - Vercel (VERCEL=1): Native fetch — Vercel servers are in US, direct Reddit access
- * - Local dev: https-proxy-agent — China needs proxy to reach Reddit
+ * - ALL environments use Node.js `https` module (not fetch!)
+ *   because fetch() silently drops Referer/Origin headers (forbidden headers per spec)
+ * - Local dev: https-proxy-agent for China proxy
+ * - Vercel: direct https request (US servers, no proxy needed)
  * - Reddit's JSON API requires Referer + Origin headers (otherwise 403)
  */
 
 const IS_VERCEL = !!process.env.VERCEL;
 
 const REDDIT_HEADERS: Record<string, string> = {
-  "User-Agent": "web:need-radar:v1.0.0 (by /u/needradar)",
+  "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
   Accept: "application/json",
   "Accept-Language": "en-US,en;q=0.9",
+  "Accept-Encoding": "gzip, deflate",
   Referer: "https://www.reddit.com/",
   Origin: "https://www.reddit.com",
 };
 
-// Lazy-load proxy agent only for local dev
+// Lazy-loaded modules
 let _proxyAgent: InstanceType<typeof import("https-proxy-agent").HttpsProxyAgent> | undefined;
 let _https: typeof import("https") | undefined;
 let _zlib: typeof import("zlib") | undefined;
 
-async function getProxyModules() {
-  if (_proxyAgent && _https && _zlib) return { agent: _proxyAgent, https: _https, zlib: _zlib };
+async function getModules() {
+  if (_https && _zlib) {
+    return { agent: _proxyAgent, https: _https, zlib: _zlib };
+  }
 
-  const proxyUrl =
-    process.env.HTTPS_PROXY ||
-    process.env.https_proxy ||
-    process.env.HTTP_PROXY ||
-    process.env.http_proxy;
-
-  if (!proxyUrl) return { agent: undefined, https: undefined, zlib: undefined };
-
-  const { HttpsProxyAgent } = await import("https-proxy-agent");
   const https = await import("https");
   const zlib = await import("zlib");
-
-  _proxyAgent = new HttpsProxyAgent(proxyUrl);
   _https = https;
   _zlib = zlib;
 
-  return { agent: _proxyAgent, https, zlib };
+  // Only load proxy agent if not on Vercel and proxy URL exists
+  if (!IS_VERCEL && !_proxyAgent) {
+    const proxyUrl =
+      process.env.HTTPS_PROXY ||
+      process.env.https_proxy ||
+      process.env.HTTP_PROXY ||
+      process.env.http_proxy;
+
+    if (proxyUrl) {
+      const { HttpsProxyAgent } = await import("https-proxy-agent");
+      _proxyAgent = new HttpsProxyAgent(proxyUrl);
+    }
+  }
+
+  return { agent: IS_VERCEL ? undefined : _proxyAgent, https, zlib };
 }
 
-/** Make a Reddit JSON API request — uses fetch on Vercel, https+proxy locally */
+/** Make a Reddit JSON API request using Node.js https (full header control) */
 async function redditFetch(url: string): Promise<{ status: number; data: string }> {
-  if (IS_VERCEL) {
-    // Vercel: native fetch (no proxy needed, server in US)
-    const res = await fetch(url, { headers: REDDIT_HEADERS });
-    return { status: res.status, data: await res.text() };
-  }
-
-  // Local dev: https-proxy-agent
-  const { agent, https, zlib } = await getProxyModules();
-  if (!agent || !https || !zlib) {
-    // No proxy configured, try native fetch as fallback
-    const res = await fetch(url, { headers: REDDIT_HEADERS });
-    return { status: res.status, data: await res.text() };
-  }
+  const { agent, https, zlib } = await getModules();
 
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
@@ -70,11 +66,8 @@ async function redditFetch(url: string): Promise<{ status: number; data: string 
         path: urlObj.pathname + urlObj.search,
         port: urlObj.port || 443,
         method: "GET",
-        agent,
-        headers: {
-          ...REDDIT_HEADERS,
-          "Accept-Encoding": "gzip, deflate",
-        },
+        agent: agent ?? undefined,
+        headers: REDDIT_HEADERS,
       },
       (res) => {
         const chunks: Buffer[] = [];
@@ -93,6 +86,9 @@ async function redditFetch(url: string): Promise<{ status: number; data: string 
       }
     );
     req.on("error", reject);
+    req.setTimeout(15000, () => {
+      req.destroy(new Error("Reddit request timeout"));
+    });
     req.end();
   });
 }
@@ -123,6 +119,12 @@ function getRelevantSubreddits(keyword: string): string[] {
     game: ["gamedev", "IndieGaming"],
     app: ["apps", "androiddev", "iOSProgramming"],
     tool: ["tools", "selfhosted"],
+    email: ["email", "selfhosted"],
+    invoice: ["smallbusiness", "Entrepreneur"],
+    landing: ["webdev", "SideProject"],
+    cron: ["selfhosted", "programming", "devops"],
+    note: ["productivity", "webdev"],
+    monitor: ["selfhosted", "devops", "programming"],
   };
 
   const specific: string[] = [];
