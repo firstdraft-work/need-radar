@@ -7,7 +7,7 @@
 
 import { Redis } from "@upstash/redis";
 
-const FREE_QUERY_LIMIT = 3;
+const FREE_QUERY_LIMIT = 20;
 
 // In-memory fallback for local dev without Redis
 const memoryMap = new Map<string, number>();

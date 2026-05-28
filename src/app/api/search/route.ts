@@ -22,8 +22,6 @@ export async function GET(request: NextRequest) {
         { status: 429 }
       );
     }
-    // Increment usage
-    await incrementUsage(code);
   }
 
   const allPosts: {
@@ -71,6 +69,11 @@ export async function GET(request: NextRequest) {
   }
 
   const needs = await filterAndScore(allPosts);
+
+  // Only count usage when we actually return results
+  if (code && needs.length > 0) {
+    await incrementUsage(code);
+  }
 
   return NextResponse.json({
     keyword,
