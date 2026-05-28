@@ -9,24 +9,9 @@ import RadarLoader from "@/components/RadarLoader";
 import Footer from "@/components/Footer";
 import { SearchResult } from "@/lib/types";
 
-const FREE_QUERY_LIMIT = 3;
-
 function getInviteCode(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem("invite_code");
-}
-
-function getUsedCount(): number {
-  if (typeof window === "undefined") return 0;
-  const stored = localStorage.getItem("used_count");
-  return stored ? parseInt(stored, 10) : 0;
-}
-
-function incrementUsedCount(): number {
-  const current = getUsedCount();
-  const next = current + 1;
-  localStorage.setItem("used_count", String(next));
-  return next;
 }
 
 export default function Home() {
@@ -39,8 +24,8 @@ export default function Home() {
   const [inviteVerified, setInviteVerified] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
 
-  // 使用次数状态
-  const [usedCount, setUsedCount] = useState(0);
+  // 使用次数状态（来自服务端）
+  const [remainingCount, setRemainingCount] = useState<number | null>(null);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
   // 搜索阶段提示
@@ -49,27 +34,44 @@ export default function Home() {
   // 是否已搜索过（控制 Hero 区收缩）
   const [hasSearched, setHasSearched] = useState(false);
 
-  // 初始化：检查邀请码和使用次数
+  // 初始化：检查邀请码 + 获取服务端用量
   useEffect(() => {
     const code = getInviteCode();
     if (code) {
       setInviteVerified(true);
+      // Fetch server-side usage
+      fetch(`/api/usage?code=${encodeURIComponent(code)}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.remaining !== undefined) {
+            setRemainingCount(data.remaining);
+          }
+        })
+        .catch(() => {
+          // If usage check fails, allow search anyway
+        });
     } else {
       setShowInviteModal(true);
     }
-    setUsedCount(getUsedCount());
   }, []);
 
-  const remainingCount = FREE_QUERY_LIMIT - usedCount;
-
-  const handleInviteSuccess = useCallback((_code: string) => {
+  const handleInviteSuccess = useCallback((code: string) => {
     setInviteVerified(true);
     setShowInviteModal(false);
+    // Fetch usage for new code
+    fetch(`/api/usage?code=${encodeURIComponent(code)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.remaining !== undefined) {
+          setRemainingCount(data.remaining);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const handleSearch = async (keyword: string) => {
     if (!inviteVerified) return;
-    if (remainingCount <= 0) {
+    if (remainingCount !== null && remainingCount <= 0) {
       setShowUpgradeModal(true);
       return;
     }
@@ -90,15 +92,33 @@ export default function Home() {
       const res = await fetch(
         `/api/search?q=${encodeURIComponent(keyword)}&code=${encodeURIComponent(inviteCode)}`
       );
+
+      if (res.status === 429) {
+        setRemainingCount(0);
+        setShowUpgradeModal(true);
+        return;
+      }
+
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error ?? `请求失败 (${res.status})`);
       }
-      const data: SearchResult = await res.json();
+
+      const data: SearchResult & { errors?: string[] } = await res.json();
       setResult(data);
 
-      const newCount = incrementUsedCount();
-      setUsedCount(newCount);
+      // Update remaining count from server
+      if (inviteCode) {
+        try {
+          const usageRes = await fetch(`/api/usage?code=${encodeURIComponent(inviteCode)}`);
+          const usageData = await usageRes.json();
+          if (usageData.remaining !== undefined) {
+            setRemainingCount(usageData.remaining);
+          }
+        } catch {
+          // Silently ignore usage check failure
+        }
+      }
 
       setSearchTime(Math.round((Date.now() - startTime) / 1000));
     } catch (err) {
@@ -166,13 +186,13 @@ export default function Home() {
             onSearch={handleSearch}
             loading={loading}
             disabled={!inviteVerified}
-            remainingCount={remainingCount}
+            remainingCount={remainingCount ?? undefined}
             onUpgradeClick={() => setShowUpgradeModal(true)}
             compact={hasSearched}
           />
 
           {/* 剩余次数 - 仅搜索后显示 */}
-          {inviteVerified && hasSearched && (
+          {inviteVerified && hasSearched && remainingCount !== null && (
             <div className="mt-2 text-xs text-[var(--muted)]">
               剩余{" "}
               <span
@@ -244,6 +264,35 @@ export default function Home() {
 
         {result && !loading && (
           <ResultsList result={result} searchTime={searchTime} />
+        )}
+
+        {/* 空结果 + 错误提示 */}
+        {result && !loading && result.needs.length === 0 && (
+          <div className="text-center py-8 fade-up">
+            <div className="w-14 h-14 mx-auto mb-3 rounded-2xl bg-amber-50 dark:bg-amber-900/20 flex items-center justify-center">
+              <svg className="w-7 h-7 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+              </svg>
+            </div>
+            <p className="text-[var(--foreground)] font-semibold mb-1">未发现值得做的需求</p>
+            <p className="text-sm text-[var(--muted)] mb-3">
+              {result.totalRaw > 0
+                ? `扫描了 ${result.totalRaw} 条帖子，AI 过滤后没有发现高质量需求信号`
+                : "未搜索到相关帖子，试试其他关键词"}
+            </p>
+            {(result as SearchResult & { errors?: string[] }).errors &&
+              (result as SearchResult & { errors?: string[] }).errors!.length > 0 && (
+              <div className="text-xs text-[var(--muted)] bg-[var(--surface)] border border-[var(--border)] rounded-lg p-3 max-w-md mx-auto text-left">
+                <p className="font-medium mb-1 text-amber-600 dark:text-amber-400">⚠ 数据源异常：</p>
+                {(result as SearchResult & { errors?: string[] }).errors!.map((err, i) => (
+                  <p key={i} className="font-mono text-xs break-all">{err}</p>
+                ))}
+              </div>
+            )}
+            <div className="mt-4 text-sm text-[var(--muted)]">
+              💡 试试这些关键词：<span className="text-blue-600 dark:text-blue-400 cursor-pointer hover:underline" onClick={() => handleSearch("ai writing")}>ai writing</span> · <span className="text-blue-600 dark:text-blue-400 cursor-pointer hover:underline" onClick={() => handleSearch("note taking app")}>note taking app</span> · <span className="text-blue-600 dark:text-blue-400 cursor-pointer hover:underline" onClick={() => handleSearch("cron job monitor")}>cron job monitor</span>
+            </div>
+          </div>
         )}
       </div>
 

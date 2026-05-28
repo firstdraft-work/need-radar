@@ -3,12 +3,12 @@
 import { useState } from "react";
 
 const SUGGESTIONS = [
-  { label: "AI tools", emoji: "🤖" },
-  { label: "SaaS", emoji: "☁️" },
-  { label: "productivity", emoji: "⚡" },
-  { label: "no code", emoji: "🧩" },
-  { label: "developer tools", emoji: "🛠️" },
-  { label: "writing app", emoji: "✍️" },
+  { label: "ai writing", emoji: "✍️" },
+  { label: "note taking app", emoji: "📝" },
+  { label: "cron job monitor", emoji: "⏰" },
+  { label: "invoice generator", emoji: "🧾" },
+  { label: "landing page builder", emoji: "🚀" },
+  { label: "email automation", emoji: "📧" },
 ];
 
 interface SearchFormProps {

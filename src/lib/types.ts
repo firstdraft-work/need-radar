@@ -29,4 +29,5 @@ export interface SearchResult {
   needs: ScoredNeed[];
   totalRaw: number;
   filteredOut: number;
+  errors?: string[];
 }
