@@ -1,25 +1,17 @@
 import { RawPost } from "./types";
-import { HttpsProxyAgent } from "https-proxy-agent";
-import https from "https";
-import zlib from "zlib";
 
 /**
  * Search Reddit for posts matching a keyword.
  *
- * Network notes:
- * - Reddit is blocked in mainland China. Set HTTPS_PROXY in .env.local for proxy access.
- * - Reddit's JSON API requires Referer + Origin headers to return 200 (otherwise 403).
- * - Uses https-proxy-agent for reliable proxy support.
+ * Network strategy:
+ * - Vercel (VERCEL=1): Native fetch — Vercel servers are in US, direct Reddit access
+ * - Local dev: https-proxy-agent — China needs proxy to reach Reddit
+ * - Reddit's JSON API requires Referer + Origin headers (otherwise 403)
  */
 
-const proxyUrl =
-  process.env.HTTPS_PROXY ||
-  process.env.https_proxy ||
-  process.env.HTTP_PROXY ||
-  process.env.http_proxy;
-const proxyAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
+const IS_VERCEL = !!process.env.VERCEL;
 
-const REDDIT_HEADERS = {
+const REDDIT_HEADERS: Record<string, string> = {
   "User-Agent": "web:need-radar:v1.0.0 (by /u/needradar)",
   Accept: "application/json",
   "Accept-Language": "en-US,en;q=0.9",
@@ -27,41 +19,79 @@ const REDDIT_HEADERS = {
   Origin: "https://www.reddit.com",
 };
 
-/** Make an HTTPS request through proxy if configured, with gzip handling */
-function httpsRequest(
-  url: string,
-  options: https.RequestOptions
-): Promise<{ status: number; data: string }> {
+// Lazy-load proxy agent only for local dev
+let _proxyAgent: InstanceType<typeof import("https-proxy-agent").HttpsProxyAgent> | undefined;
+let _https: typeof import("https") | undefined;
+let _zlib: typeof import("zlib") | undefined;
+
+async function getProxyModules() {
+  if (_proxyAgent && _https && _zlib) return { agent: _proxyAgent, https: _https, zlib: _zlib };
+
+  const proxyUrl =
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy;
+
+  if (!proxyUrl) return { agent: undefined, https: undefined, zlib: undefined };
+
+  const { HttpsProxyAgent } = await import("https-proxy-agent");
+  const https = await import("https");
+  const zlib = await import("zlib");
+
+  _proxyAgent = new HttpsProxyAgent(proxyUrl);
+  _https = https;
+  _zlib = zlib;
+
+  return { agent: _proxyAgent, https, zlib };
+}
+
+/** Make a Reddit JSON API request — uses fetch on Vercel, https+proxy locally */
+async function redditFetch(url: string): Promise<{ status: number; data: string }> {
+  if (IS_VERCEL) {
+    // Vercel: native fetch (no proxy needed, server in US)
+    const res = await fetch(url, { headers: REDDIT_HEADERS });
+    return { status: res.status, data: await res.text() };
+  }
+
+  // Local dev: https-proxy-agent
+  const { agent, https, zlib } = await getProxyModules();
+  if (!agent || !https || !zlib) {
+    // No proxy configured, try native fetch as fallback
+    const res = await fetch(url, { headers: REDDIT_HEADERS });
+    return { status: res.status, data: await res.text() };
+  }
+
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
-    const reqOptions: https.RequestOptions = {
-      ...options,
-      hostname: urlObj.hostname,
-      path: urlObj.pathname + urlObj.search,
-      port: urlObj.port || 443,
-      agent: proxyAgent,
-      headers: {
-        ...options.headers,
-        "Accept-Encoding": "gzip, deflate",
+    const req = https.request(
+      {
+        hostname: urlObj.hostname,
+        path: urlObj.pathname + urlObj.search,
+        port: urlObj.port || 443,
+        method: "GET",
+        agent,
+        headers: {
+          ...REDDIT_HEADERS,
+          "Accept-Encoding": "gzip, deflate",
+        },
       },
-    };
-
-    const req = https.request(reqOptions, (res) => {
-      const chunks: Buffer[] = [];
-      res.on("data", (chunk: Buffer) => chunks.push(chunk));
-      res.on("end", () => {
-        let data = Buffer.concat(chunks);
-        if (res.headers["content-encoding"] === "gzip") {
-          try {
-            data = zlib.gunzipSync(data);
-          } catch {
-            // If gunzip fails, use raw data
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => {
+          let data = Buffer.concat(chunks);
+          if (res.headers["content-encoding"] === "gzip") {
+            try {
+              data = zlib.gunzipSync(data);
+            } catch {
+              // If gunzip fails, use raw data
+            }
           }
-        }
-        resolve({ status: res.statusCode ?? 0, data: data.toString() });
-      });
-    });
-
+          resolve({ status: res.statusCode ?? 0, data: data.toString() });
+        });
+      }
+    );
     req.on("error", reject);
     req.end();
   });
@@ -72,10 +102,8 @@ function getRelevantSubreddits(keyword: string): string[] {
   const kw = keyword.toLowerCase();
   const tokens = kw.split(/\s+/);
 
-  // Always include these core indie dev subreddits
   const core = ["indiehackers", "SideProject", "Entrepreneur", "startups"];
 
-  // Keyword-specific subreddits
   const keywordMap: Record<string, string[]> = {
     ai: ["artificial", "MachineLearning", "ChatGPT", "LocalLLaMA"],
     "artificial intelligence": ["artificial", "MachineLearning", "ChatGPT"],
@@ -104,19 +132,15 @@ function getRelevantSubreddits(keyword: string): string[] {
     }
   }
 
-  // Combine: specific subs first, then core (deduplicated)
   const all = [...new Set([...specific, ...core])];
-  return all.slice(0, 10); // Max 10 subreddits to avoid rate limiting
+  return all.slice(0, 10);
 }
 
 /** Fetch hot posts from a single subreddit */
-async function fetchSubredditHot(
-  subreddit: string
-): Promise<RawPost[]> {
+async function fetchSubredditHot(subreddit: string): Promise<RawPost[]> {
   try {
-    const { status, data } = await httpsRequest(
-      `https://www.reddit.com/r/${subreddit}/hot.json?limit=15`,
-      { method: "GET", headers: REDDIT_HEADERS }
+    const { status, data } = await redditFetch(
+      `https://www.reddit.com/r/${subreddit}/hot.json?limit=15`
     );
     if (status !== 200) return [];
 
@@ -150,12 +174,13 @@ export async function searchReddit(
 
   // Strategy 1: Global search with original keyword + individual tokens
   const tokens = keyword.split(/\s+/).filter((t) => t.length > 1);
-  const searchQueries = [keyword]; // Full keyword first
+  const searchQueries = [keyword];
 
-  // If multi-word, also search with just the most important token
   if (tokens.length > 1) {
-    // Add the most unique-looking token (longest, not a common stop word)
-    const stopWords = new Set(["the", "a", "an", "is", "are", "was", "for", "and", "or", "of", "in", "to", "tool", "app", "best", "good", "need"]);
+    const stopWords = new Set([
+      "the", "a", "an", "is", "are", "was", "for", "and", "or", "of", "in",
+      "to", "tool", "app", "best", "good", "need",
+    ]);
     const meaningful = tokens.filter((t) => !stopWords.has(t.toLowerCase()));
     if (meaningful.length > 0) {
       searchQueries.push(meaningful.join(" "));
@@ -171,9 +196,8 @@ export async function searchReddit(
         t: "month",
         type: "link",
       });
-      const { status, data } = await httpsRequest(
-        `https://www.reddit.com/search.json?${params}`,
-        { method: "GET", headers: REDDIT_HEADERS }
+      const { status, data } = await redditFetch(
+        `https://www.reddit.com/search.json?${params}`
       );
 
       if (status === 200) {
@@ -215,7 +239,6 @@ export async function searchReddit(
 
   for (const result of subredditResults) {
     if (result.status === "fulfilled") {
-      // Lenient matching: if ANY keyword token appears in title/body
       const filtered = result.value.filter((post) => {
         const text = `${post.title} ${post.body}`.toLowerCase();
         return kwTokens.some((token) => text.includes(token));
@@ -232,7 +255,7 @@ export async function searchReddit(
     return true;
   });
 
-  // Sort by engagement for better quality
+  // Sort by engagement
   unique.sort(
     (a, b) => b.upvotes + b.comments * 2 - (a.upvotes + a.comments * 2)
   );
