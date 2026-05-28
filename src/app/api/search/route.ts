@@ -2,10 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { searchReddit } from "@/lib/reddit";
 import { searchProductHunt } from "@/lib/producthunt";
 import { filterAndScore } from "@/lib/glm";
+import { incrementUsage, isLimitExceeded } from "@/lib/usage";
 import { SearchResult } from "@/lib/types";
-
-const FREE_QUERY_LIMIT = 3;
-const usageMap = new Map<string, number>();
 
 export async function GET(request: NextRequest) {
   const keyword = request.nextUrl.searchParams.get("q")?.trim();
@@ -15,20 +13,30 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Parameter 'q' is required" }, { status: 400 });
   }
 
-  // 检查使用限制
+  // Check usage limit
   if (code) {
-    const used = usageMap.get(code) ?? 0;
-    if (used >= FREE_QUERY_LIMIT) {
+    const exceeded = await isLimitExceeded(code);
+    if (exceeded) {
       return NextResponse.json(
         { error: "免费查询次数已用完，请升级 Pro" },
         { status: 429 }
       );
     }
-    // 增加使用次数
-    usageMap.set(code, used + 1);
+    // Increment usage
+    await incrementUsage(code);
   }
 
-  const allPosts: { source: "reddit" | "producthunt"; title: string; body: string; url: string; upvotes: number; comments: number; subreddit?: string; tagline?: string; createdAt: string }[] = [];
+  const allPosts: {
+    source: "reddit" | "producthunt";
+    title: string;
+    body: string;
+    url: string;
+    upvotes: number;
+    comments: number;
+    subreddit?: string;
+    tagline?: string;
+    createdAt: string;
+  }[] = [];
   const errors: string[] = [];
 
   const [redditResult, phResult] = await Promise.allSettled([
